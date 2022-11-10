@@ -1,0 +1,43 @@
+stages:
+  - build
+  - deploy
+before_script:
+  - IMAGE_TAG="$(echo $CI_COMMIT_SHA | head -c 8)"
+build:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.9.0-debug
+    entrypoint: [""]
+  script:
+    - echo "{\"credsStore\":\"ecr-login\",\"credHelpers\":{\"$AWS_ACCOUNT_ID.dkr.ecr.region.amazonaws.com\":\"ecr-login\"}}" > /kaniko/.docker/config.json
+    - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination $REPOSITORY_URL:$IMAGE_TAG
+  only:
+    - main
+deploy:
+  stage: deploy
+  image: alpine
+  variables:
+    AWS_ACCESS_KEY_ID_<project-name>: "$AWS_ACCESS_KEY_ID_<project-name>"
+    AWS_SECRET_ACCESS_KEY_<project-name>: "$AWS_SECRET_ACCESS_KEY_<project-name>"
+    AWS_DEFAULT_REGION: "$AWS_DEFAULT_REGION"
+    TASK_DEFINITION_NAME: "$TASK_DEFINITION_NAME"
+    
+  script:
+    - echo $REPOSITORY_URL:$IMAGE_TAG
+    - apk add --no-cache aws-cli jq
+    - aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID_<project-name>
+    - aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY_<project-name>
+    - aws configure set region $AWS_DEFAULT_REGION
+    - NEW_IMAGE="$REPOSITORY_URL:$IMAGE_TAG"
+    - CURRENT_TASK=$(aws ecs describe-task-definition --task-definition "$TASK_DEFINITION_NAME")  
+    - NEW_TASK=$(echo $CURRENT_TASK | jq --arg val "$NEW_IMAGE" '.taskDefinition | .containerDefinitions[0].image = $val | del(.taskDefinitionArn) | del(.revision) | del(.status) | del(.requiresAttributes) | del(.compatibilities) | del(.registeredAt) | del(.registeredBy)')
+
+# Create new revision of the task definition, with updated image revision.
+    - NEW_TASK_DEFINITION=$(aws ecs register-task-definition --cli-input-json "$NEW_TASK")
+
+    - NEW_TASK_REVISION=$(echo "$NEW_TASK_DEFINITION" | jq '.taskDefinition.revision')
+
+# Update ECS service with newly created task defintion revision.
+    - aws ecs update-service --cluster "$CLUSTER_NAME" --service "$SERVICE_NAME" --task-definition "$TASK_DEFINITION_NAME":"$NEW_TASK_REVISION"
+  only:
+    - main
