@@ -1,0 +1,102 @@
+stages:
+  # - code_review
+  # - vulnerability_check
+  - build
+  # - build-uat
+  # - push
+  # # - push-uat
+  - deploy
+  # - build-master
+  # - push-master
+# Code_review:
+#  stage: code_review  # code review using sonarqube
+#  script:
+#     - sonar-scanner -X  -Dsonar.projectKey=$CI_PROJECT_NAME  -Dsonar.sources=. -Dsonar.exclusions=**/*_test.go,**/vendor/** -Dsonar.tests=. -Dsonar.test.inclusions=**/*_test.go -Dsonar.test.exclusions=**/vendor/** -Dsonar.go.coverage.reportPaths="coverage.out"  -Dsonar.projectVersion=d$CI_PIPELINE_ID -Dsonar.host.url=$sonarqube_url   -Dsonar.login=$sonarqube_token
+#  allow_failure: true
+
+# Vulnerability_check:
+#  stage: vulnerability_check # sheck code for Vulnerabilities
+#  script:
+#     -  /home/gitlab-runner/vulnerability-scanner/goscan.sh $PWD $CI_PROJECT_NAME $CI_PIPELINE_ID
+#  allow_failure: true
+
+
+build:
+  stage: build
+  variables:
+    REGISTRY: "$REGISTRY"
+    DOCKER_USER: "$DOCKER_USER"
+    DOCKER_PASS: "$DOCKER_PASS"
+    DOCKERHUB_URI: "$DOCKERHUB_URI"
+  image:
+    name: gcr.io/kaniko-project/executor:v1.9.0-debug
+    entrypoint: [""]
+  script:
+  - mkdir -p /kaniko/.docker
+  - echo "{\"auths\":{\"${REGISTRY}\":{\"auth\":\"$(printf "%s:%s" "${DOCKER_USER}" "${DOCKER_PASS}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+  - >-
+    /kaniko/executor
+    --context "./"
+    --dockerfile "./Dockerfile"
+    --destination "rapiddevops/gitlab-testing:$CI_COMMIT_SHORT_SHA"
+  only:
+    - dev
+
+deploy:
+  stage: deploy
+  variables:
+    AWS_ACCESS_KEY_ID: "$AWS_ACCESS_KEY_ID"
+    AWS_ACCESS_SECRET_KEY: "$AWS_ACCESS_SECRET_KEY"
+    AWS_DEFAULT_REGION: "$AWS_DEFAULT_REGION"
+    CLUSTER_NAME: "$CLUSTER_NAME"
+    DP_NAME: "$DP_NAME"
+    POD_NAME: "$POD_NAME"
+    PROJECT_NAME: "$PROJECT_NAME"
+    DOCKERHUB_URI: "$DOCKERHUB_URI"
+
+  image: matshareyourscript/aws-helm-kubectl
+  script:
+    - aws eks --region ${AWS_DEFAULT_REGION} update-kubeconfig --name ${CLUSTER_NAME}
+    - kubectl get node
+    - kubectl set image deployment/${DP_NAME} ${POD_NAME}=${DOCKERHUB_URI}:$CI_COMMIT_SHORT_SHA -n ${PROJECT_NAME}-$CI_COMMIT_BRANCH
+# Push:
+#   stage: push ## push image  to private docker registry
+#   script:
+#       - docker push $aws_url/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:d$CI_PIPELINE_ID
+#   only:
+#     - dev
+# Deploy:
+#   stage: deploy ## push latest code changes to develop envirnoment
+#   script:
+#       - kubectl set image deployment/node-backend-dp node-backend=$aws_url/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:d$CI_PIPELINE_ID -n demo --kubeconfig=$(echo $aws_Kubeconfig)
+#   only:
+#     - dev
+
+# Build-uat:
+#   stage: build-uat
+#   script:
+#     - echo "$aws_url/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:u$CI_PIPELINE_ID" | xargs -I {} docker build -t {} --build-arg BUILD_ID=d$CI_PIPELINE_ID -f Dockerfile .
+#   only:
+#     - uat
+
+# Push-uat:
+#   stage: push-uat
+#   script:
+#       - docker push $aws_url/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:u$CI_PIPELINE_ID
+#   only:
+#     - uat
+
+# build-master:
+#   stage: build-master
+#   script:
+#     - echo "$aws_url/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:m$CI_PIPELINE_ID" | xargs -I {} docker build -t {} --build-arg BUILD_ID=d$CI_PIPELINE_ID -f Dockerfile .
+#   only:
+#     - master   
+# push-master:
+#   stage: push-master
+#   script:
+#     - docker push $aws_url/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:m$CI_PIPELINE_ID
+#   only:
+#     - master     
+
+
